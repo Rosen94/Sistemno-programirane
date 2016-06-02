@@ -1,0 +1,216 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <string.h>
+#include <fcntl.h>
+
+void doprocessing (int sock);
+void *threadFunction (void *file);
+
+pthread_mutex_t mutexf=PTHREAD_MUTEX_INITIALIZER;
+
+void *threadFunction(void *file)
+{
+	char *filename=(char*)file;
+	int input_fd,output_fd;
+	ssize_t ret_in,ret_out;
+	char buff[256];
+
+        while (1){
+	   input_fd=open(filename,O_RDWR);
+        	if (input_fd==-1)
+                {
+	            perror("Error opening");
+                    return;
+                }
+
+           output_fd=open("LaundryReady.txt",O_APPEND|O_WRONLY);
+           if (output_fd==-1)
+              {
+                  perror("Error opening");
+                  return;
+              }
+
+	   while ((ret_in=read(input_fd, buff,256))>0)
+	   {
+	  	   pthread_mutex_lock(&mutexf);
+		   ret_out=write(output_fd,buff,(ssize_t)ret_in);
+	       	   pthread_mutex_unlock(&mutexf);
+		   if (ret_out!=ret_in){
+			perror("Broken Washing Machine");
+			return;
+		   }
+	   }
+	   ftruncate(input_fd,0);
+           close (input_fd);
+           close (output_fd);
+           bzero(buff,256);
+	   sleep(4);
+	}
+
+}
+
+
+int main( int argc, char *argv[] ) {
+   int sockfd, newsockfd, portno, clilen;
+   char buffer[256];
+   struct sockaddr_in serv_addr, cli_addr;
+   int n, pid;
+   
+   /* First call to socket() function */
+   sockfd = socket(AF_INET, SOCK_STREAM, 0);
+   
+   if (sockfd < 0) {
+      perror("ERROR opening socket");
+      exit(1);
+   }
+   
+   /* Initialize socket structure */
+   bzero((char *) &serv_addr, sizeof(serv_addr));
+   portno = 8888;
+   
+   serv_addr.sin_family = AF_INET;
+   serv_addr.sin_addr.s_addr = INADDR_ANY;
+   serv_addr.sin_port = htons(portno);
+   
+   /* Now bind the host address using bind() call.*/
+   if (bind(sockfd, (struct sockaddr *) &serv_addr, sizeof(serv_addr)) < 0) {
+      perror("ERROR on binding");
+      exit(1);
+   }
+   
+   /* Now start listening for the clients, here
+      * process will go in sleep mode and will wait
+      * for the incoming connection
+   */
+   
+   listen(sockfd,5);
+   clilen = sizeof(cli_addr);
+   int counter = 0;
+   pthread_t t1,t2,t3;
+   while (1) {
+      newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
+		
+      if (newsockfd < 0) {
+         perror("ERROR on accept");
+         exit(1);
+      }
+      counter=1;
+      /* Create child process */
+      pid = fork();
+		
+      if (pid < 0) {
+         perror("ERROR on fork");
+         exit(1);
+      }
+      
+      if (pid == 0) {
+         /* This is the client process */
+         close(sockfd);
+         doprocessing(newsockfd);
+         exit(0);
+      }
+      else {
+         close(newsockfd);
+	 if(counter == 1){
+	 pthread_create(&t1,NULL,threadFunction,"Washing1.txt");
+	 pthread_create(&t2,NULL,threadFunction,"Washing2.txt");
+	 pthread_create(&t3,NULL,threadFunction,"Washing3.txt");
+       	 }
+	 counter++;      
+      }
+		
+   } /* end of while */
+pthread_join(t1,NULL);
+pthread_join(t2,NULL);
+pthread_join(t3,NULL);
+}
+
+void doprocessing (int sock) {
+   int n;
+   char buffer[256];
+   bzero(buffer,256);
+
+   n = write(sock,"Hello, enter your names",23);
+   if (n < 0) {
+      perror("ERROR writing to socket");
+      exit(1);
+   }
+   n = read(sock,buffer,255);
+   printf("%s",buffer);
+   if (n < 0) {
+      perror("ERROR reading from socket");
+      exit(1);
+   }
+      char * arg[6];
+   arg[0]="grep";
+   arg[1]="-w";
+   arg[2]=buffer;
+   arg[3]="-c";
+   arg[4]="LaundryReady.txt";
+   arg[5]=NULL;
+
+
+   int pid_ex=fork();
+
+   if (pid_ex<0){
+      perror("Error!!");
+      exit(1);
+   }
+
+   if (pid_ex==0){
+     int fd=open("Log.txt",O_WRONLY);
+     if (fd==-1)
+     {
+         perror("Error opening");
+         return;
+     }
+
+      dup2(fd,STDOUT_FILENO);
+      execvp(arg[0],arg);
+      perror("execvp");
+      exit(1);
+      fflush(stdout);
+      close(STDOUT_FILENO);
+      close(fd);
+   }
+   else{
+      int returnStatus;
+      waitpid(pid_ex,&returnStatus,0);
+    if(returnStatus==0){
+      char result[32];
+
+      int fd=open("Log.txt",O_RDONLY);
+      if (fd==-1)
+      {
+         perror("Error opening");
+         return;
+      }
+      pthread_mutex_lock(&mutexf);
+      int bytes_read=read(fd,result,sizeof(int));
+      pthread_mutex_unlock(&mutexf);
+      if (bytes_read<0)
+      {
+	  perror("Laundry problem!");
+	  printf("rrrrrrr");
+	  exit(1);
+      }
+      int n=atoi(result);
+
+      if (n==1){
+           write(sock,"Your laundry IS Ready",21);
+      }	
+      else write(sock, "Your Laundry Isn't Ready",24);
+      close(fd);
+     }
+     if(returnStatus!=0)
+	{
+	 write(sock,"Your Laundry Isn't Ready",24);
+	}
+   }
+}
